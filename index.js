@@ -18,6 +18,9 @@ const client = new Client({
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Buffer de mensajes para agrupar entradas seguidas del mismo usuario
+const userBuffers = new Map();
+
 // Cargar configuración externa de identidad
 function cargarConfiguracion() {
   try {
@@ -94,7 +97,7 @@ function cargarPrompt() {
   }
 }
 
-async function generarRespuestaIA(contents, systemInstruction, maxTokens = 150) {
+async function generarRespuestaIA(contents, systemInstruction, maxTokens = 120) {
   for (const modelName of MODEL_FALLBACKS) {
     try {
       const model = genAI.getGenerativeModel({
@@ -102,7 +105,7 @@ async function generarRespuestaIA(contents, systemInstruction, maxTokens = 150) 
         systemInstruction: systemInstruction,
         generationConfig: {
           maxOutputTokens: maxTokens,
-          temperature: 0.85
+          temperature: 0.8
         }
       });
 
@@ -115,7 +118,6 @@ async function generarRespuestaIA(contents, systemInstruction, maxTokens = 150) 
   throw new Error('Todos los modelos de la lista fallaron.');
 }
 
-// Aplicar un estado personalizado sin tocar la programación del dado
 function aplicarEstadoEnDiscord(textoEstado) {
   const presenciaRandom = PRESENCIAS_ALEATORIAS[Math.floor(Math.random() * PRESENCIAS_ALEATORIAS.length)];
   client.user.setPresence({
@@ -124,7 +126,6 @@ function aplicarEstadoEnDiscord(textoEstado) {
   });
 }
 
-// Genera un estado aleatorio usando la IA y su personalidad
 async function cambiarEstadoAleatorio() {
   try {
     const promptEstado = `${cargarPrompt()}\n\nTAREA: Genera un texto CORTÍSIMO para tu estado de perfil de Discord (máximo 6 palabras). Que sea 100% acorde a tu personalidad. NO comillas ni explicaciones.`;
@@ -137,9 +138,8 @@ async function cambiarEstadoAleatorio() {
   }
 }
 
-// Tirada de dado autónoma (5 a 15 minutos) que no se reinicia al cambiar estado manualmente
 function programarSiguienteCambioDeEstado() {
-  const minutosRandom = Math.floor(Math.random() * (15 - 5 + 1)) + 5; // Entre 5 y 15 minutos
+  const minutosRandom = Math.floor(Math.random() * (15 - 5 + 1)) + 5;
   const tiempoEsperaMs = minutosRandom * 60000;
 
   setTimeout(() => {
@@ -148,7 +148,6 @@ function programarSiguienteCambioDeEstado() {
   }, tiempoEsperaMs);
 }
 
-// Servidor de AutoPing para Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -171,68 +170,89 @@ client.on('messageCreate', async (message) => {
   const fueMencionado = message.mentions.has(client.user.id);
   const esDM = !message.guild;
 
-  // Detonadores dinámicos leídos desde config.json
   const detonadores = [botConfig.nombre, ...(botConfig.apodos || [])].map(n => n.toLowerCase());
   const detectoNombreOApodo = detonadores.some(detonador => detonador && contenido.includes(detonador));
 
   const intervieneAleatoriamente = Math.random() < 0.05;
 
   if (fueMencionado || esDM || detectoNombreOApodo || intervieneAleatoriamente) {
-    try {
-      await message.channel.sendTyping();
+    const bufferKey = `${message.channel.id}-${message.author.id}`;
 
-      let datosActividad = 'Sin información pública.';
-      if (message.guild) {
-        try {
-          const miembroActualizado = await message.guild.members.fetch({ user: message.author.id, force: true });
-          const pres = miembroActualizado.presence;
+    if (!userBuffers.has(bufferKey)) {
+      userBuffers.set(bufferKey, {
+        messages: [],
+        timer: null
+      });
+    }
 
-          if (pres && pres.activities && pres.activities.length > 0) {
-            const actividades = pres.activities.map(a => {
-              if (a.type === ActivityType.Custom) return `Estado personalizado: "${a.state || 'N/A'}"`;
-              if (a.type === ActivityType.Playing) return `Jugando a: ${a.name}`;
-              if (a.type === ActivityType.Listening) return `Escuchando: ${a.details ? a.details + ' - ' + a.name : a.name}`;
-              if (a.type === ActivityType.Streaming) return `En directo: ${a.name}`;
-              if (a.type === ActivityType.Watching) return `Viendo: ${a.name}`;
-              return `Actividad: ${a.name}`;
-            }).join(' | ');
+    const userBuffer = userBuffers.get(bufferKey);
+    userBuffer.messages.push(message);
 
-            datosActividad = `Estado: ${pres.status} | Actividades: [${actividades}]`;
-          } else if (pres) {
-            datosActividad = `Estado: ${pres.status} | Sin actividades/música/juegos activos.`;
+    if (userBuffer.timer) clearTimeout(userBuffer.timer);
+
+    // Espera 2.5 segundos para agrupar si el usuario envía mensajes seguidos
+    userBuffer.timer = setTimeout(async () => {
+      const msgsParaProcesar = [...userBuffer.messages];
+      userBuffers.delete(bufferKey);
+
+      const ultimoMsg = msgsParaProcesar[msgsParaProcesar.length - 1];
+      const textoCombinado = msgsParaProcesar.map(m => m.content).join(' ');
+
+      try {
+        await ultimoMsg.channel.sendTyping();
+
+        let datosActividad = 'Sin información pública.';
+        if (ultimoMsg.guild) {
+          try {
+            const miembroActualizado = await ultimoMsg.guild.members.fetch({ user: ultimoMsg.author.id, force: true });
+            const pres = miembroActualizado.presence;
+
+            if (pres && pres.activities && pres.activities.length > 0) {
+              const actividades = pres.activities.map(a => {
+                if (a.type === ActivityType.Custom) return `Estado personalizado: "${a.state || 'N/A'}"`;
+                if (a.type === ActivityType.Playing) return `Jugando a: ${a.name}`;
+                if (a.type === ActivityType.Listening) return `Escuchando: ${a.details ? a.details + ' - ' + a.name : a.name}`;
+                if (a.type === ActivityType.Streaming) return `En directo: ${a.name}`;
+                if (a.type === ActivityType.Watching) return `Viendo: ${a.name}`;
+                return `Actividad: ${a.name}`;
+              }).join(' | ');
+
+              datosActividad = `Estado: ${pres.status} | Actividades: [${actividades}]`;
+            } else if (pres) {
+              datosActividad = `Estado: ${pres.status} | Sin actividades/música/juegos activos.`;
+            }
+          } catch (e) {
+            datosActividad = 'No se pudo leer la presencia en tiempo real.';
           }
-        } catch (e) {
-          datosActividad = 'No se pudo leer la presencia en tiempo real.';
         }
-      }
 
-      // Máximo historial de mensajes para no confundirse
-      const ultimosMensajes = await message.channel.messages.fetch({ limit: 50 });
-      const historialFormateado = Array.from(ultimosMensajes.values())
-        .reverse()
-        .map(m => `${m.author.username}: ${m.content}`)
-        .join('\n');
+        // Carga ligera de historial reciente para agilizar tiempo de respuesta
+        const ultimosMensajes = await ultimoMsg.channel.messages.fetch({ limit: 12 });
+        const historialFormateado = Array.from(ultimosMensajes.values())
+          .reverse()
+          .map(m => `${m.author.username}: ${m.content}`)
+          .join('\n');
 
-      let partesEntrada = [];
-      const adjuntoImagen = message.attachments.find(a => a.contentType?.startsWith('image/'));
+        let partesEntrada = [];
+        const adjuntoImagen = msgsParaProcesar.flatMap(m => Array.from(m.attachments.values())).find(a => a.contentType?.startsWith('image/'));
 
-      if (adjuntoImagen) {
-        const respuestaImg = await fetch(adjuntoImagen.url);
-        const bufferArray = await respuestaImg.arrayBuffer();
-        partesEntrada.push({
-          inlineData: {
-            data: Buffer.from(bufferArray).toString('base64'),
-            mimeType: adjuntoImagen.contentType
-          }
-        });
-      }
+        if (adjuntoImagen) {
+          const respuestaImg = await fetch(adjuntoImagen.url);
+          const bufferArray = await respuestaImg.arrayBuffer();
+          partesEntrada.push({
+            inlineData: {
+              data: Buffer.from(bufferArray).toString('base64'),
+              mimeType: adjuntoImagen.contentType
+            }
+          });
+        }
 
-      const memoriasUsuario = obtenerMemorias(message.author.id);
+        const memoriasUsuario = obtenerMemorias(ultimoMsg.author.id);
 
-      const systemPrompt = `${cargarPrompt()}
+        const systemPrompt = `${cargarPrompt()}
 
 --- DATOS EN TIEMPO REAL DEL USUARIO ---
-Usuario: ${message.author.username} (Apodo: ${message.member?.displayName || message.author.username})
+Usuario: ${ultimoMsg.author.username} (Apodo: ${ultimoMsg.member?.displayName || ultimoMsg.author.username})
 Actividad actual del usuario: ${datosActividad}
 
 --- MEMORIAS A LARGO PLAZO DE ESTE USUARIO ---
@@ -244,69 +264,70 @@ Si se te pide cambiar de estado o deseas cambiarlo libremente en este instante, 
 AUTONOMÍA DE MEMORIA:
 Si el usuario revela algo relevante sobre su vida o gustos, escribe al FINAL de tu respuesta: [MEMORIA: dato a guardar]`;
 
-      const promptEntrada = `Historial reciente del chat:\n${historialFormateado}\n\nMensaje actual de ${message.author.username}: ${message.content}`;
-      partesEntrada.push(promptEntrada);
+        const promptEntrada = `Historial reciente del chat:\n${historialFormateado}\n\nMensaje actual de ${ultimoMsg.author.username}: ${textoCombinado}`;
+        partesEntrada.push(promptEntrada);
 
-      let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 150);
+        let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 120);
 
-      // Detectar cambio de estado autónomo (Sin borrar ni alterar el temporizador activo)
-      const matchEstado = respuestaIA.match(/\[ESTADO:\s*(.*?)\]/i);
-      if (matchEstado) {
-        const nuevoEstadoTexto = matchEstado[1].trim().substring(0, 128);
-        aplicarEstadoEnDiscord(nuevoEstadoTexto);
-        respuestaIA = respuestaIA.replace(/\[ESTADO:\s*(.*?)\]/i, '').trim();
-      }
+        // Detectar cambio de estado
+        const matchEstado = respuestaIA.match(/\[ESTADO:\s*(.*?)\]/i);
+        if (matchEstado) {
+          const nuevoEstadoTexto = matchEstado[1].trim().substring(0, 128);
+          aplicarEstadoEnDiscord(nuevoEstadoTexto);
+          respuestaIA = respuestaIA.replace(/\[ESTADO:\s*(.*?)\]/i, '').trim();
+        }
 
-      // Detectar guardado de memoria autónoma
-      const matchMemoria = respuestaIA.match(/\[MEMORIA:\s*(.*?)\]/i);
-      if (matchMemoria) {
-        guardarMemoriaAutonoma(message.author.id, matchMemoria[1]);
-        respuestaIA = respuestaIA.replace(/\[MEMORIA:\s*(.*?)\]/i, '').trim();
-      }
+        // Detectar memoria
+        const matchMemoria = respuestaIA.match(/\[MEMORIA:\s*(.*?)\]/i);
+        if (matchMemoria) {
+          guardarMemoriaAutonoma(ultimoMsg.author.id, matchMemoria[1]);
+          respuestaIA = respuestaIA.replace(/\[MEMORIA:\s*(.*?)\]/i, '').trim();
+        }
 
-      // Procesar envíos de mensajes
-      const mensajesSeguidos = respuestaIA.split('|||').map(m => m.trim()).filter(m => m.length > 0);
+        const mensajesSeguidos = respuestaIA.split('|||').map(m => m.trim()).filter(m => m.length > 0);
 
-      for (let i = 0; i < mensajesSeguidos.length; i++) {
-        const msgTexto = mensajesSeguidos[i];
+        for (let i = 0; i < mensajesSeguidos.length; i++) {
+          const msgTexto = mensajesSeguidos[i];
 
-        if (esDM) {
-          // En MD nunca realiza reply/linkeo
-          if (i > 0) {
-            await message.channel.sendTyping();
-            await new Promise(r => setTimeout(r, 1200));
-          }
-          if (msgTexto.length > 2000) {
-            const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
-            for (const chunk of fragmentos) await message.channel.send(chunk);
-          } else {
-            await message.channel.send(msgTexto);
-          }
-        } else {
-          // En servidores: el primer mensaje cita/reply, los siguientes se envían sueltos
-          if (i === 0) {
+          if (esDM) {
+            if (i > 0) {
+              await ultimoMsg.channel.sendTyping();
+              await new Promise(r => setTimeout(r, 1000));
+            }
             if (msgTexto.length > 2000) {
               const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
-              for (const chunk of fragmentos) await message.reply(chunk);
+              for (const chunk of fragmentos) await ultimoMsg.channel.send(chunk);
             } else {
-              await message.reply(msgTexto);
+              await ultimoMsg.channel.send(msgTexto);
             }
           } else {
-            await message.channel.sendTyping();
-            await new Promise(r => setTimeout(r, 1200));
-            if (msgTexto.length > 2000) {
-              const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
-              for (const chunk of fragmentos) await message.channel.send(chunk);
+            // El primer mensaje vincula al usuario sin notificar en amarillo (allowedMentions)
+            if (i === 0) {
+              if (msgTexto.length > 2000) {
+                const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
+                for (const chunk of fragmentos) {
+                  await ultimoMsg.reply({ content: chunk, allowedMentions: { repliedUser: false } });
+                }
+              } else {
+                await ultimoMsg.reply({ content: msgTexto, allowedMentions: { repliedUser: false } });
+              }
             } else {
-              await message.channel.send(msgTexto);
+              await ultimoMsg.channel.sendTyping();
+              await new Promise(r => setTimeout(r, 1000));
+              if (msgTexto.length > 2000) {
+                const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
+                for (const chunk of fragmentos) await ultimoMsg.channel.send(chunk);
+              } else {
+                await ultimoMsg.channel.send(msgTexto);
+              }
             }
           }
         }
-      }
 
-    } catch (error) {
-      console.error('[ClinKore Engine] Error en la interacción:', error.message);
-    }
+      } catch (error) {
+        console.error('[ClinKore Engine] Error en la interacción:', error.message);
+      }
+    }, 2500);
   }
 });
 
