@@ -18,6 +18,22 @@ const client = new Client({
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+function cargarConfiguracion() {
+  try {
+    if (fs.existsSync('./config.json')) {
+      return JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+    }
+  } catch (e) {
+    console.error('Error al leer config.json:', e.message);
+  }
+  return {
+    nombre: 'bot',
+    apodos: []
+  };
+}
+
+const botConfig = cargarConfiguracion();
+
 // Endpoints / Modelos en orden de fallback exacto solicitado
 const MODEL_ENDPOINTS = [
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
@@ -40,7 +56,6 @@ const MODEL_ENDPOINTS = [
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent'
 ];
 
-// Mapeo automático de la lista de URLs hacia nombres de modelos para la SDK
 const MODEL_FALLBACKS = MODEL_ENDPOINTS.map(url => {
   const match = url.match(/\/models\/([^:]+):/);
   return match ? match[1] : 'gemini-1.5-flash';
@@ -74,11 +89,11 @@ function cargarPrompt() {
   try {
     return fs.readFileSync('prompt.txt', 'utf8');
   } catch (err) {
-    return 'Eres DAREK v1 revOlution.';
+    return 'Eres una IA servicial.';
   }
 }
 
-async function generarRespuestaIA(contents, systemInstruction, maxTokens = 100) {
+async function generarRespuestaIA(contents, systemInstruction, maxTokens = 120) {
   for (const modelName of MODEL_FALLBACKS) {
     try {
       const model = genAI.getGenerativeModel({
@@ -99,19 +114,19 @@ async function generarRespuestaIA(contents, systemInstruction, maxTokens = 100) 
   throw new Error('Todos los modelos fallaron debido a cuota o conexión.');
 }
 
-// Genera un estado personalizado dinámico y ultra rápido creado por la IA
+// Genera un estado personalizado creado 100% desde cero por la IA según su personalidad
 async function cambiarEstadoAleatorio() {
   const presenciaRandom = PRESENCIAS_ALEATORIAS[Math.floor(Math.random() * PRESENCIAS_ALEATORIAS.length)];
-  let estadoGenerado = 'Pensando en ti... 🙂';
+  let estadoGenerado = 'Observando... 🙂';
 
   try {
-    const promptEstado = `${cargarPrompt()}\n\nTAREA: Genera una frase MUY CORTA para tu estado (máximo 6 palabras). Sé conciso y directo. NO comillas.`;
-    const respuesta = await generarRespuestaIA(['Estado actual.'], promptEstado, 25);
+    const promptEstado = `${cargarPrompt()}\n\nTAREA: Genera un texto CORTÍSIMO para tu estado de perfil de Discord (máximo 6 palabras). Que sea 100% acorde a tu personalidad. NO uses comillas ni explicaciones.`;
+    const respuesta = await generarRespuestaIA(['Genera tu estado personalizado ahora.'], promptEstado, 30);
     if (respuesta && respuesta.trim()) {
       estadoGenerado = respuesta.trim().substring(0, 128);
     }
   } catch (err) {
-    console.error('Error al generar estado con IA, usando estado base.');
+    console.error('Error al generar estado con IA:', err.message);
   }
 
   client.user.setPresence({
@@ -120,14 +135,14 @@ async function cambiarEstadoAleatorio() {
   });
 }
 
-// Tirada de dado autónoma para cambiar estado aleatoriamente tras un tiempo variable
+// Tirada de dado autónoma para cambiar estado aleatoriamente
 function programarSiguienteCambioDeEstado() {
-  const dado = Math.floor(Math.random() * 6) + 1; // Tirada de dado de 1 a 6
-  const tiempoEsperaMs = dado * 300000; // Entre 5 minutos (1) y 30 minutos (6)
+  const dado = Math.floor(Math.random() * 6) + 1; // Tirada de 1 a 6
+  const tiempoEsperaMs = dado * 300000; // Entre 5 y 30 minutos
 
   setTimeout(() => {
     cambiarEstadoAleatorio();
-    programarSiguienteCambioDeEstado(); // Repetir ciclo
+    programarSiguienteCambioDeEstado();
   }, tiempoEsperaMs);
 }
 
@@ -135,13 +150,13 @@ function programarSiguienteCambioDeEstado() {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('DAREK v1 revOlution activo.');
+  res.end('Servidor de IA Activo.');
 }).listen(PORT, () => {
   console.log(`[AutoPing] Servidor escuchando en puerto ${PORT}`);
 });
 
 client.once('ready', () => {
-  console.log(`[DAREK] Vivo como ${client.user.tag}`);
+  console.log(`[BOT] Vivo como ${client.user.tag}`);
 
   cambiarEstadoAleatorio();
   programarSiguienteCambioDeEstado();
@@ -150,40 +165,41 @@ client.once('ready', () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  const nombreBot = 'darek';
   const contenido = message.content.toLowerCase();
   const fueMencionado = message.mentions.has(client.user.id);
   const esDM = !message.guild;
-  const contieneNombre = contenido.includes(nombreBot);
+
+  // Activa respuesta si lo mencionan, le escriben en privado, o nombran su nombre o cualquiera de sus apodos
+  const detonadores = [botConfig.nombre, ...(botConfig.apodos || [])].map(n => n.toLowerCase());
+  const detectoNombreOApodo = detonadores.some(detonador => detonador && contenido.includes(detonador));
 
   const intervieneAleatoriamente = Math.random() < 0.05;
 
-  if (fueMencionado || esDM || contieneNombre || intervieneAleatoriamente) {
+  if (fueMencionado || esDM || detectoNombreOApodo || intervieneAleatoriamente) {
     try {
       await message.channel.sendTyping();
 
       let datosActividad = 'Sin información pública.';
       if (message.guild) {
         try {
-          // Obtener presencia directamente desde la caché del servidor o del objeto del mensaje
           const pres = message.guild.presences.cache.get(message.author.id) || message.member?.presence;
 
           if (pres && pres.activities && pres.activities.length > 0) {
-            const listaActividades = pres.activities.map(a => {
+            const actividades = pres.activities.map(a => {
               if (a.type === ActivityType.Custom) return `Estado personalizado: "${a.state || 'N/A'}"`;
               if (a.type === ActivityType.Playing) return `Jugando a: ${a.name}`;
-              if (a.type === ActivityType.Listening) return `Escuchando: ${a.details ? a.details + ' en ' + a.name : a.name}`;
+              if (a.type === ActivityType.Listening) return `Escuchando: ${a.details ? a.details + ' - ' + a.name : a.name}`;
               if (a.type === ActivityType.Streaming) return `En directo: ${a.name}`;
               if (a.type === ActivityType.Watching) return `Viendo: ${a.name}`;
               return `Actividad: ${a.name}`;
             }).join(' | ');
 
-            datosActividad = `Estado general: ${pres.status} | Detalle de actividades: [${listaActividades}]`;
+            datosActividad = `Estado: ${pres.status} | Actividades: [${actividades}]`;
           } else if (pres) {
-            datosActividad = `Estado general: ${pres.status} | Sin juegos ni música activos en este momento.`;
+            datosActividad = `Estado: ${pres.status} | Sin juegos/música activos.`;
           }
         } catch (e) {
-          datosActividad = 'No se pudo obtener la presencia del usuario.';
+          datosActividad = 'No se pudo leer la presencia.';
         }
       }
 
@@ -213,13 +229,13 @@ client.on('messageCreate', async (message) => {
 
 --- DATOS EN TIEMPO REAL DEL USUARIO ---
 Usuario: ${message.author.username} (Apodo: ${message.member?.displayName || message.author.username})
-Actividad actual del usuario en Discord: ${datosActividad}
+Actividad actual: ${datosActividad}
 
 --- MEMORIAS IMPORTANTES DE ESTE USUARIO ---
 ${memoriasUsuario}
 
 AUTONOMÍA DE ESTADO:
-Si se requiere cambiar de estado en Discord, pon al FINAL: [ESTADO: texto]
+Si deseas cambiar tu estado de perfil de Discord en este instante, pon al FINAL: [ESTADO: texto del nuevo estado]
 
 AUTONOMÍA DE MEMORIA:
 Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
@@ -227,9 +243,9 @@ Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
       const promptEntrada = `Historial del grupo:\n${historialFormateado}\n\nMensaje de ${message.author.username}: ${message.content}`;
       partesEntrada.push(promptEntrada);
 
-      let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 100);
+      let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 120);
 
-      // Detectar cambio de estado
+      // Detectar cambio de estado autónomo desde la IA
       const matchEstado = respuestaIA.match(/\[ESTADO:\s*(.*?)\]/i);
       if (matchEstado) {
         const nuevoEstadoTexto = matchEstado[1].trim().substring(0, 128);
@@ -240,41 +256,53 @@ Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
         respuestaIA = respuestaIA.replace(/\[ESTADO:\s*(.*?)\]/i, '').trim();
       }
 
-      // Detectar memoria
+      // Detectar memoria autónoma
       const matchMemoria = respuestaIA.match(/\[MEMORIA:\s*(.*?)\]/i);
       if (matchMemoria) {
         guardarMemoriaAutonoma(message.author.id, matchMemoria[1]);
         respuestaIA = respuestaIA.replace(/\[MEMORIA:\s*(.*?)\]/i, '').trim();
       }
 
-      // Procesar envío de mensajes
+      // Envíos de mensaje
       const mensajesSeguidos = respuestaIA.split('|||').map(m => m.trim()).filter(m => m.length > 0);
 
       for (let i = 0; i < mensajesSeguidos.length; i++) {
         const msgTexto = mensajesSeguidos[i];
 
-        if (i === 0) {
-          if (msgTexto.length > 2000) {
-            const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
-            for (const chunk of fragmentos) await message.reply(chunk);
-          } else {
-            await message.reply(msgTexto);
+        if (esDM) {
+          if (i > 0) {
+            await message.channel.sendTyping();
+            await new Promise(r => setTimeout(r, 1200));
           }
-        } else {
-          // Mensaje secundario (desacoplado / no linkeado)
-          await message.channel.sendTyping();
-          await new Promise(r => setTimeout(r, 1200));
           if (msgTexto.length > 2000) {
             const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
             for (const chunk of fragmentos) await message.channel.send(chunk);
           } else {
             await message.channel.send(msgTexto);
           }
+        } else {
+          if (i === 0) {
+            if (msgTexto.length > 2000) {
+              const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
+              for (const chunk of fragmentos) await message.reply(chunk);
+            } else {
+              await message.reply(msgTexto);
+            }
+          } else {
+            await message.channel.sendTyping();
+            await new Promise(r => setTimeout(r, 1200));
+            if (msgTexto.length > 2000) {
+              const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
+              for (const chunk of fragmentos) await message.channel.send(chunk);
+            } else {
+              await message.channel.send(msgTexto);
+            }
+          }
         }
       }
 
     } catch (error) {
-      console.error('Error en DAREK:', error.message);
+      console.error('Error en el bot:', error.message);
     }
   }
 });
