@@ -1,0 +1,14 @@
+{
+  "name": "darek",
+  "version": "1.0.0",
+  "description": "DAREK v1 revOlution - Bot de Discord con IA y personalidad autónoma",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
+  }
+}
