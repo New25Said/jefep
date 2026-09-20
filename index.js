@@ -31,26 +31,31 @@ function cargarConfiguracion() {
 
 const botConfig = cargarConfiguracion();
 
+// Endpoints de Gemini ordenados por prioridad de rendimiento y velocidad en 2026
 const MODEL_ENDPOINTS = [
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+  // --- CAPA 1: Máxima Velocidad, Eficiencia y Bajo Costo (Recomendados para uso diario) ---
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+
+  // --- CAPA 2: Balance Perfecto (Velocidad + Tareas Agenciales/Multimodales Complejas) ---
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent',
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent'
+  
+  // --- CAPA 3: Alias Dinámico Estables ---
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+
+  // --- CAPA 4: Razonamiento Avanzado y Pro (Mayor latencia, máxima precisión) ---
+  'https://googleapis.com', // Añadido por consistencia de línea
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent'
 ];
+
 
 const MODEL_FALLBACKS = MODEL_ENDPOINTS.map(url => {
   const match = url.match(/\/models\/([^:]+):/);
@@ -130,7 +135,6 @@ async function cambiarEstadoAleatorio() {
   }
 }
 
-// Dado de presencia e independencia: Cambia aleatoriamente entre 10 y 20 minutos
 function programarSiguienteCambioDeEstado() {
   const minutosRandom = Math.floor(Math.random() * (20 - 10 + 1)) + 10;
   const tiempoEsperaMs = minutosRandom * 60000;
@@ -141,7 +145,6 @@ function programarSiguienteCambioDeEstado() {
   }, tiempoEsperaMs);
 }
 
-// Web Scraping básico de links e inspección de contenido
 async function extraerContenidoUrl(url) {
   try {
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -154,7 +157,6 @@ async function extraerContenidoUrl(url) {
   }
 }
 
-// Servidor de AutoPing para Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -210,7 +212,6 @@ client.on('messageCreate', async (message) => {
         }
       }
 
-      // Máximo historial de 50 mensajes para mantener contexto completo de ráfagas rápidas de mensajes
       const ultimosMensajes = await message.channel.messages.fetch({ limit: 50 });
       const historialFormateado = Array.from(ultimosMensajes.values())
         .reverse()
@@ -220,24 +221,31 @@ client.on('messageCreate', async (message) => {
       let partesEntrada = [];
       let infoArchivosAdjuntos = [];
 
-      // Procesamiento de imágenes, gifs, videos y archivos
+      // Procesamiento visual de imágenes y archivos optimizado para la API de Gemini
       for (const [id, attachment] of message.attachments) {
         const mime = attachment.contentType || '';
-        if (mime.startsWith('image/')) {
-          const respuestaImg = await fetch(attachment.url);
-          const bufferArray = await respuestaImg.arrayBuffer();
-          partesEntrada.push({
-            inlineData: {
-              data: Buffer.from(bufferArray).toString('base64'),
-              mimeType: mime
-            }
-          });
+        const esImagen = mime.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(attachment.name);
+
+        if (esImagen) {
+          try {
+            const respuestaImg = await fetch(attachment.url);
+            const bufferArray = await respuestaImg.arrayBuffer();
+            const tipoMimeCorrecto = mime.startsWith('image/') ? mime : 'image/png';
+
+            partesEntrada.push({
+              inlineData: {
+                mimeType: tipoMimeCorrecto,
+                data: Buffer.from(bufferArray).toString('base64')
+              }
+            });
+          } catch (errImg) {
+            console.error('[ClinKore Engine] Error al procesar imagen:', errImg.message);
+          }
         } else {
           infoArchivosAdjuntos.push(`[Adjunto recibido: ${attachment.name} (${mime}) - URL: ${attachment.url}]`);
         }
       }
 
-      // Web Scraping de URLs detectadas en el mensaje
       const urlRegex = /(https?:\/\/[^\s]+)/g;
       const urlsEncontradas = message.content.match(urlRegex);
       if (urlsEncontradas) {
@@ -271,11 +279,12 @@ AUTONOMÍA DE MEMORIA:
 Si el usuario revela algo relevante sobre su vida o gustos, escribe al FINAL de tu respuesta: [MEMORIA: dato a guardar]`;
 
       const promptEntrada = `Historial reciente del chat:\n${historialFormateado}\n\nMensaje actual de ${message.author.username}: ${message.content}`;
+      
+      // Las partes de imágenes siempre deben ubicarse al principio del arreglo
       partesEntrada.push(promptEntrada);
 
       let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 150);
 
-      // Detectar cambio de estado autónomo
       const matchEstado = respuestaIA.match(/\[ESTADO:\s*(.*?)\]/i);
       if (matchEstado) {
         const nuevoEstadoTexto = matchEstado[1].trim().substring(0, 128);
@@ -283,14 +292,12 @@ Si el usuario revela algo relevante sobre su vida o gustos, escribe al FINAL de 
         respuestaIA = respuestaIA.replace(/\[ESTADO:\s*(.*?)\]/i, '').trim();
       }
 
-      // Detectar guardado de memoria autónoma
       const matchMemoria = respuestaIA.match(/\[MEMORIA:\s*(.*?)\]/i);
       if (matchMemoria) {
         guardarMemoriaAutonoma(message.author.id, matchMemoria[1]);
         respuestaIA = respuestaIA.replace(/\[MEMORIA:\s*(.*?)\]/i, '').trim();
       }
 
-      // Procesar envíos de mensajes
       const mensajesSeguidos = respuestaIA.split('|||').map(m => m.trim()).filter(m => m.length > 0);
 
       for (let i = 0; i < mensajesSeguidos.length; i++) {
@@ -309,7 +316,6 @@ Si el usuario revela algo relevante sobre su vida o gustos, escribe al FINAL de 
           }
         } else {
           if (i === 0) {
-            // RESPUESTA VINCULADA SIN RESALTADO AMARILLO (repliedUser: false)
             if (msgTexto.length > 2000) {
               const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
               for (const chunk of fragmentos) {
