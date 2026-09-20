@@ -1,7 +1,7 @@
 {
-  "name": "darek",
+  "name": "clinkore-bot",
   "version": "1.0.0",
-  "description": "DAREK v1 revOlution - Bot de Discord con IA y personalidad autónoma",
+  "description": "ClinKore v1 revOlution - Plantilla Base Anónima para Bots de IA",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
