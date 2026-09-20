@@ -18,13 +18,14 @@ const client = new Client({
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Cargar configuración externa de identidad
 function cargarConfiguracion() {
   try {
     if (fs.existsSync('./config.json')) {
       return JSON.parse(fs.readFileSync('./config.json', 'utf8'));
     }
   } catch (e) {
-    console.error('Error al leer config.json:', e.message);
+    console.error('[ClinKore Engine] Error al leer config.json:', e.message);
   }
   return {
     nombre: 'bot',
@@ -34,7 +35,7 @@ function cargarConfiguracion() {
 
 const botConfig = cargarConfiguracion();
 
-// Endpoints / Modelos en orden de fallback exacto solicitado
+// Endpoints / Modelos en orden de fallback exacto
 const MODEL_ENDPOINTS = [
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
@@ -89,11 +90,11 @@ function cargarPrompt() {
   try {
     return fs.readFileSync('prompt.txt', 'utf8');
   } catch (err) {
-    return 'Eres una IA servicial.';
+    return 'Eres una IA autónoma.';
   }
 }
 
-async function generarRespuestaIA(contents, systemInstruction, maxTokens = 120) {
+async function generarRespuestaIA(contents, systemInstruction, maxTokens = 150) {
   for (const modelName of MODEL_FALLBACKS) {
     try {
       const model = genAI.getGenerativeModel({
@@ -101,7 +102,7 @@ async function generarRespuestaIA(contents, systemInstruction, maxTokens = 120) 
         systemInstruction: systemInstruction,
         generationConfig: {
           maxOutputTokens: maxTokens,
-          temperature: 0.8
+          temperature: 0.85
         }
       });
 
@@ -111,34 +112,35 @@ async function generarRespuestaIA(contents, systemInstruction, maxTokens = 120) 
       console.warn(`[Fallback] El modelo ${modelName} falló:`, error.message);
     }
   }
-  throw new Error('Todos los modelos fallaron debido a cuota o conexión.');
+  throw new Error('Todos los modelos de la lista fallaron.');
 }
 
-// Genera un estado personalizado creado 100% desde cero por la IA según su personalidad
-async function cambiarEstadoAleatorio() {
+// Aplicar un estado personalizado sin tocar la programación del dado
+function aplicarEstadoEnDiscord(textoEstado) {
   const presenciaRandom = PRESENCIAS_ALEATORIAS[Math.floor(Math.random() * PRESENCIAS_ALEATORIAS.length)];
-  let estadoGenerado = 'Observando... 🙂';
-
-  try {
-    const promptEstado = `${cargarPrompt()}\n\nTAREA: Genera un texto CORTÍSIMO para tu estado de perfil de Discord (máximo 6 palabras). Que sea 100% acorde a tu personalidad. NO uses comillas ni explicaciones.`;
-    const respuesta = await generarRespuestaIA(['Genera tu estado personalizado ahora.'], promptEstado, 30);
-    if (respuesta && respuesta.trim()) {
-      estadoGenerado = respuesta.trim().substring(0, 128);
-    }
-  } catch (err) {
-    console.error('Error al generar estado con IA:', err.message);
-  }
-
   client.user.setPresence({
     status: presenciaRandom,
-    activities: [{ name: 'Custom Status', type: ActivityType.Custom, state: estadoGenerado }]
+    activities: [{ name: 'Custom Status', type: ActivityType.Custom, state: textoEstado }]
   });
 }
 
-// Tirada de dado autónoma para cambiar estado aleatoriamente
+// Genera un estado aleatorio usando la IA y su personalidad
+async function cambiarEstadoAleatorio() {
+  try {
+    const promptEstado = `${cargarPrompt()}\n\nTAREA: Genera un texto CORTÍSIMO para tu estado de perfil de Discord (máximo 6 palabras). Que sea 100% acorde a tu personalidad. NO comillas ni explicaciones.`;
+    const respuesta = await generarRespuestaIA(['Genera tu estado de perfil actual.'], promptEstado, 30);
+    if (respuesta && respuesta.trim()) {
+      aplicarEstadoEnDiscord(respuesta.trim().substring(0, 128));
+    }
+  } catch (err) {
+    console.error('[ClinKore Engine] Error al generar estado con IA:', err.message);
+  }
+}
+
+// Tirada de dado autónoma (5 a 15 minutos) que no se reinicia al cambiar estado manualmente
 function programarSiguienteCambioDeEstado() {
-  const dado = Math.floor(Math.random() * 6) + 1; // Tirada de 1 a 6
-  const tiempoEsperaMs = dado * 300000; // Entre 5 y 30 minutos
+  const minutosRandom = Math.floor(Math.random() * (15 - 5 + 1)) + 5; // Entre 5 y 15 minutos
+  const tiempoEsperaMs = minutosRandom * 60000;
 
   setTimeout(() => {
     cambiarEstadoAleatorio();
@@ -150,13 +152,13 @@ function programarSiguienteCambioDeEstado() {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Servidor de IA Activo.');
+  res.end('ClinKore v1 Engine Activo.');
 }).listen(PORT, () => {
   console.log(`[AutoPing] Servidor escuchando en puerto ${PORT}`);
 });
 
 client.once('ready', () => {
-  console.log(`[BOT] Vivo como ${client.user.tag}`);
+  console.log(`[ClinKore v1] Online como ${client.user.tag}`);
 
   cambiarEstadoAleatorio();
   programarSiguienteCambioDeEstado();
@@ -169,7 +171,7 @@ client.on('messageCreate', async (message) => {
   const fueMencionado = message.mentions.has(client.user.id);
   const esDM = !message.guild;
 
-  // Activa respuesta si lo mencionan, le escriben en privado, o nombran su nombre o cualquiera de sus apodos
+  // Detonadores dinámicos leídos desde config.json
   const detonadores = [botConfig.nombre, ...(botConfig.apodos || [])].map(n => n.toLowerCase());
   const detectoNombreOApodo = detonadores.some(detonador => detonador && contenido.includes(detonador));
 
@@ -182,7 +184,8 @@ client.on('messageCreate', async (message) => {
       let datosActividad = 'Sin información pública.';
       if (message.guild) {
         try {
-          const pres = message.guild.presences.cache.get(message.author.id) || message.member?.presence;
+          const miembroActualizado = await message.guild.members.fetch({ user: message.author.id, force: true });
+          const pres = miembroActualizado.presence;
 
           if (pres && pres.activities && pres.activities.length > 0) {
             const actividades = pres.activities.map(a => {
@@ -196,14 +199,15 @@ client.on('messageCreate', async (message) => {
 
             datosActividad = `Estado: ${pres.status} | Actividades: [${actividades}]`;
           } else if (pres) {
-            datosActividad = `Estado: ${pres.status} | Sin juegos/música activos.`;
+            datosActividad = `Estado: ${pres.status} | Sin actividades/música/juegos activos.`;
           }
         } catch (e) {
-          datosActividad = 'No se pudo leer la presencia.';
+          datosActividad = 'No se pudo leer la presencia en tiempo real.';
         }
       }
 
-      const ultimosMensajes = await message.channel.messages.fetch({ limit: 10 });
+      // Máximo historial de mensajes para no confundirse
+      const ultimosMensajes = await message.channel.messages.fetch({ limit: 50 });
       const historialFormateado = Array.from(ultimosMensajes.values())
         .reverse()
         .map(m => `${m.author.username}: ${m.content}`)
@@ -229,47 +233,45 @@ client.on('messageCreate', async (message) => {
 
 --- DATOS EN TIEMPO REAL DEL USUARIO ---
 Usuario: ${message.author.username} (Apodo: ${message.member?.displayName || message.author.username})
-Actividad actual: ${datosActividad}
+Actividad actual del usuario: ${datosActividad}
 
---- MEMORIAS IMPORTANTES DE ESTE USUARIO ---
+--- MEMORIAS A LARGO PLAZO DE ESTE USUARIO ---
 ${memoriasUsuario}
 
 AUTONOMÍA DE ESTADO:
-Si deseas cambiar tu estado de perfil de Discord en este instante, pon al FINAL: [ESTADO: texto del nuevo estado]
+Si se te pide cambiar de estado o deseas cambiarlo libremente en este instante, escribe al FINAL de tu respuesta: [ESTADO: texto del nuevo estado]
 
 AUTONOMÍA DE MEMORIA:
-Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
+Si el usuario revela algo relevante sobre su vida o gustos, escribe al FINAL de tu respuesta: [MEMORIA: dato a guardar]`;
 
-      const promptEntrada = `Historial del grupo:\n${historialFormateado}\n\nMensaje de ${message.author.username}: ${message.content}`;
+      const promptEntrada = `Historial reciente del chat:\n${historialFormateado}\n\nMensaje actual de ${message.author.username}: ${message.content}`;
       partesEntrada.push(promptEntrada);
 
-      let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 120);
+      let respuestaIA = await generarRespuestaIA(partesEntrada, systemPrompt, 150);
 
-      // Detectar cambio de estado autónomo desde la IA
+      // Detectar cambio de estado autónomo (Sin borrar ni alterar el temporizador activo)
       const matchEstado = respuestaIA.match(/\[ESTADO:\s*(.*?)\]/i);
       if (matchEstado) {
         const nuevoEstadoTexto = matchEstado[1].trim().substring(0, 128);
-        client.user.setPresence({
-          status: PRESENCIAS_ALEATORIAS[Math.floor(Math.random() * PRESENCIAS_ALEATORIAS.length)],
-          activities: [{ name: 'Custom Status', type: ActivityType.Custom, state: nuevoEstadoTexto }]
-        });
+        aplicarEstadoEnDiscord(nuevoEstadoTexto);
         respuestaIA = respuestaIA.replace(/\[ESTADO:\s*(.*?)\]/i, '').trim();
       }
 
-      // Detectar memoria autónoma
+      // Detectar guardado de memoria autónoma
       const matchMemoria = respuestaIA.match(/\[MEMORIA:\s*(.*?)\]/i);
       if (matchMemoria) {
         guardarMemoriaAutonoma(message.author.id, matchMemoria[1]);
         respuestaIA = respuestaIA.replace(/\[MEMORIA:\s*(.*?)\]/i, '').trim();
       }
 
-      // Envíos de mensaje
+      // Procesar envíos de mensajes
       const mensajesSeguidos = respuestaIA.split('|||').map(m => m.trim()).filter(m => m.length > 0);
 
       for (let i = 0; i < mensajesSeguidos.length; i++) {
         const msgTexto = mensajesSeguidos[i];
 
         if (esDM) {
+          // En MD nunca realiza reply/linkeo
           if (i > 0) {
             await message.channel.sendTyping();
             await new Promise(r => setTimeout(r, 1200));
@@ -281,6 +283,7 @@ Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
             await message.channel.send(msgTexto);
           }
         } else {
+          // En servidores: el primer mensaje cita/reply, los siguientes se envían sueltos
           if (i === 0) {
             if (msgTexto.length > 2000) {
               const fragmentos = msgTexto.match(/[\s\S]{1,1900}/g);
@@ -302,7 +305,7 @@ Si el usuario revela algo relevante, pon al FINAL: [MEMORIA: dato]`;
       }
 
     } catch (error) {
-      console.error('Error en el bot:', error.message);
+      console.error('[ClinKore Engine] Error en la interacción:', error.message);
     }
   }
 });
